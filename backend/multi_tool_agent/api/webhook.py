@@ -1,0 +1,69 @@
+import os
+import asyncio
+from fastapi import APIRouter, Request, HTTPException, Header, BackgroundTasks
+from ..agent import sentinel_agent
+
+router = APIRouter()
+
+# Securing webhooks via Secret Token
+GITLAB_WEBHOOK_SECRET = os.getenv("GITLAB_WEBHOOK_SECRET", "super-secret-token")
+
+def run_agent_healing_pipeline(project_id: str, project_name: str, pipeline_id: int, commit_sha: str):
+    """Executes the Google ADK healing cycle as a detached background thread."""
+    print(f"Triggering ADK Healing workflow for project {project_name}...")
+    
+    # A runtime prompt dynamically targeting the failure context
+    prompt = f"""
+    GitLab Pipeline failure detected!
+    - Project ID: {project_id}
+    - Project Name: {project_name}
+    - Failed Pipeline ID: {pipeline_id}
+    - Failing Commit SHA: {commit_sha}
+    
+    Please examine the failed jobs, fetch the trace logs, fix the error, and create an automated Merge Request.
+    """
+    
+    # Triggers the Gemini reasoning and MCP server interaction
+    response = sentinel_agent.run(prompt)
+    print(f"Agent Response: {response.text}")
+
+
+@router.post("/gitlab-webhook")
+async def handle_gitlab_webhook(
+    request: Request, 
+    background_tasks: BackgroundTasks,
+    x_gitlab_token: str = Header(None) # Token matching configured value in GitLab UI
+):
+    # Security validation
+    if x_gitlab_token != GITLAB_WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid GitLab Webhook Secret Token")
+
+    # Extracting the payload data as JSON
+    payload = await request.json()
+    
+    # Detecting what type of event sent this hook
+    object_kind = payload.get("object_kind") # Expected: 'pipeline' or 'deployment' or 'build'
+    
+    if object_kind == "pipeline":
+        attributes = payload.get("object_attributes", {})
+        status = attributes.get("status") # 'pending', 'running', 'success', 'failed'
+        
+        # We only care if there is a failure
+        if status == "failed":
+            project_id = payload.get("project", {}).get("id")
+            project_name = payload.get("project", {}).get("path_with_namespace")
+            pipeline_id = attributes.get("id")
+            commit_sha = attributes.get("sha")
+            
+            # Delegating to background workers so GitLab gets an immediate HTTP 200 back
+            background_tasks.add_task(
+                run_agent_healing_pipeline, 
+                project_id=str(project_id), 
+                project_name=project_name, 
+                pipeline_id=pipeline_id, 
+                commit_sha=commit_sha
+            )
+            return {"status": "processing", "message": "Failing pipeline passed to Sentinel Agent."}
+            
+    # Ignoring passing/running stages to prevent unnecessary token usage 
+    return {"status": "ignored", "message": "Not a failing pipeline event status."}

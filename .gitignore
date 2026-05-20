@@ -156,6 +156,14 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+backend/venv/
+backend/.env
+
+# Google ADK
+.adk/
+
+# VS Code
+.vscode/
 
 # Spyder project settings
 .spyderproject
