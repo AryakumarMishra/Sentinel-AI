@@ -3,6 +3,7 @@ import httpx
 import base64
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from ..config.settings import settings
 
 load_dotenv()
 
@@ -10,8 +11,8 @@ load_dotenv()
 mcp = FastMCP("Sentinel GitLab Healer")
 
 # Configuring the GitLab Connections
-GL_TOKEN = os.environ.get("GITLAB_PRIVATE_TOKEN")
-GL_BASE = "https://gitlab.com/api/v4"
+GL_TOKEN = settings.GITLAB_PRIVATE_TOKEN
+GL_BASE = settings.GITLAB_BASE_URL
 HEADERS = {"PRIVATE-TOKEN": GL_TOKEN}
 
 

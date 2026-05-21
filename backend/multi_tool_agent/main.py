@@ -2,6 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.webhook import webhook_router
 from api.routes import routes_router
+from .config.settings import settings
+
+# Validating configuration on startup
+settings.validate()
 
 app = FastAPI(title="Sentinel AI Healing Engine Backend")
 

@@ -2,11 +2,12 @@ import os
 import asyncio
 from fastapi import APIRouter, Request, HTTPException, Header, BackgroundTasks
 from ..agent import sentinel_agent
+from ..config.settings import settings
 
 router = APIRouter()
 
 # Securing webhooks via Secret Token
-GITLAB_WEBHOOK_SECRET = os.getenv("GITLAB_WEBHOOK_SECRET", "super-secret-token")
+GITLAB_WEBHOOK_SECRET = settings.GITLAB_WEBHOOK_SECRET
 
 def run_agent_healing_pipeline(project_id: str, project_name: str, pipeline_id: int, commit_sha: str):
     """Executes the Google ADK healing cycle as a detached background thread."""
