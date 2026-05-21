@@ -1,5 +1,6 @@
 import os
 import httpx
+import base64
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
@@ -10,7 +11,7 @@ mcp = FastMCP("Sentinel GitLab Healer")
 
 # Configuring the GitLab Connections
 GL_TOKEN = os.environ.get("GITLAB_PRIVATE_TOKEN")
-GL_BASE = "https://gitlab.com"
+GL_BASE = "https://gitlab.com/api/v4"
 HEADERS = {"PRIVATE-TOKEN": GL_TOKEN}
 
 
@@ -82,7 +83,29 @@ async def get_recent_commits(project_path: str, ref_name: str = "main", max_coun
         result = []
         for c in commits:
             result.append(f"SHA: {c.get('id')[:8]} | Title: {c.get('title')} | Author: {c.get('author_name')}")
-        return "\n".join(result)      
+        return "\n".join(result)    
+
+
+@mcp.tool()
+async def read_repository_files(project_path: str, file_path: str, ref: str = "main") -> str:
+    """
+    Reads the raw string content of a code file inside the GitLab repository.
+    Use this to see the source code that caused the pipeline log failure.
+    Args:
+        project_path: The URL-encoded path of the project (e.g., 'user%2Frepo') or ID.
+        file_path: The exact path to the file within the repository (e.g., 'src/main.py').
+        ref: The branch name or commit SHA to read the file from (defaults to 'main').
+    """
+    encoded_path = file_path.replace("/", "%2F")
+    url = f"{GL_BASE}/projects/{project_path}/repository/files/{encoded_path}/raw"
+    params = {"ref":ref}
+
+    async with httpx.AsyncClient as client:
+        response = await client.get(url, headers=HEADERS, params=params)
+        
+        if response.status_code != 200:
+            return f"Error: {response.status_code} - {response.text}"
+        return response.text
 
 
 @mcp.tool()
@@ -107,6 +130,34 @@ async def create_branch(project_path: str, branch_name: str, ref: str = "main") 
         if response.status_code == 201:
             return f"Success: Branch '{branch_name}' created off reference '{ref}'."
         return f"Error creating branch: {response.status_code} - {response.text}"
+    
+
+@mcp.tool()
+async def commit_file_change(project_path: str, branch_name: str, file_path: str, commit_message: str, file_content: str) -> str:
+    """
+    Commits a direct text overwrite/fix to an existing file on a specific branch.
+    Args:
+        project_path: The URL-encoded path of the project (e.g., 'user%2Frepo') or ID.
+        branch_name: The target branch where the fix will be saved (use the branch created via create_branch).
+        file_path: The path of the file to modify.
+        commit_message: A descriptive commit message explaining the automated fix.
+        file_content: The full content of the updated file text.
+    """
+    encoded_path = file_path.replace("/", "%2F")
+    url = f"{GL_BASE}/projects/{project_path}/repository/files/{encoded_path}"
+    
+    payload = {
+        "branch": branch_name,
+        "commit_message": commit_message,
+        "content": file_content
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.put(url, headers=HEADERS, json=payload) # PUT request to update an existing repository
+
+        if response.status_code == 200:
+            return f"Success: Modified file '{file_path}' successfully on branch '{branch_name}'."
+        return f"Error updating file: {response.status_code} - {response.text}"
 
 
 @mcp.tool()

@@ -23,7 +23,6 @@ def run_agent_healing_pipeline(project_id: str, project_name: str, pipeline_id: 
     Please examine the failed jobs, fetch the trace logs, fix the error, and create an automated Merge Request.
     """
     
-    # Triggers the Gemini reasoning and MCP server interaction
     response = sentinel_agent.run(prompt)
     print(f"Agent Response: {response.text}")
 
