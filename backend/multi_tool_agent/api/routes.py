@@ -2,7 +2,7 @@ import os
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from workflows.pipeline_recovery import PipelineRecoveryWorkflow
-from agent import sentinel_agent
+from agent import root_agent
 
 routes_router = APIRouter()
 
@@ -41,7 +41,7 @@ def run_background_agent_job(recovery_id: str, project_path: str, pipeline_id: i
         6. Open a pull request through create_merge_request.
         """
         
-        agent_response = sentinel_agent.run(prompt)
+        agent_response = root_agent.run(prompt)
         tracker.log_step("COMPLETED", "SUCCESS", f"Execution complete. Agent Note: {agent_response.text[:200]}")
         
     except Exception as e:

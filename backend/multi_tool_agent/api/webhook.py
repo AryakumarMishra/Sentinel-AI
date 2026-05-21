@@ -1,7 +1,7 @@
 import os
 import asyncio
 from fastapi import APIRouter, Request, HTTPException, Header, BackgroundTasks
-from ..agent import sentinel_agent
+from ..agent import root_agent
 from ..config.settings import settings
 
 router = APIRouter()
@@ -24,7 +24,7 @@ def run_agent_healing_pipeline(project_id: str, project_name: str, pipeline_id: 
     Please examine the failed jobs, fetch the trace logs, fix the error, and create an automated Merge Request.
     """
     
-    response = sentinel_agent.run(prompt)
+    response = root_agent.run(prompt)
     print(f"Agent Response: {response.text}")
 
 

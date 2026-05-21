@@ -20,7 +20,7 @@ from mcp import StdioServerParameters
 
 gitlab_mcp_server = StdioServerParameters(
     command='python',
-    args=["-m", "tools.gitlab_mcp.server"],
+    args=["-m", "gitlab_mcp.server"],
     env={
         "GITLAB_PRIVATE_TOKEN": os.environ.get("GITLAB_PRIVATE_TOKEN")
     }
@@ -30,7 +30,7 @@ gitlab_tools = MCPToolset(
     connection_params=gitlab_mcp_server
 )
 
-sentinel_agent = Agent(
+root_agent = Agent(
     name="sentinel_ai",
     model="gemini-2.5-flash-lite",
     description=(
@@ -47,7 +47,7 @@ sentinel_agent = Agent(
             3. Parse the log error trace to discover the file path causing the runtime failure.
             4. Run 'read_repository_file' to study the target code lines that broke.
             5. Reason about the solution and generate fixed file string blocks.
-            6. Create a new branch via 'create_branch' (e.g., 'fix/pipeline-{id}').
+            6. Create a new branch via 'create_branch' (e.g., 'fix/pipeline-ID').
             7. Push your code update using 'commit_file_change' targeting your newly isolated branch.
             8. Open a Merge Request using 'create_merge_request' so developers can review your automated solution.
             """
