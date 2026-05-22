@@ -15,6 +15,8 @@ class PipelineRecoveryWorkflow:
         self.start_time = datetime.now(timezone.utc).isoformat()
         self.status = "TRIGGERED" # TRIGGERED -> ANALYZING -> PATCHING -> MR_CREATED -> FAILED
         self.steps = []
+        self.proposed_fix = {} # Stores {"file_path": "...", "explanation": "...", "content": "..."} for Human Approval
+        self.approved_by_human = False
         self.save_state()
 
     def log_step(self, step_name: str, status: str, details: str = ""):
