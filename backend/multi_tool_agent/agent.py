@@ -15,15 +15,19 @@
 
 import os
 from google.adk.agents import Agent
-from google.adk.tools.mcp_tool import MCPToolset
+from google.adk.tools.mcp_tool import MCPToolset, StdioConnectionParams
 from mcp import StdioServerParameters
 
-gitlab_mcp_server = StdioServerParameters(
+server_params = StdioServerParameters(
     command='python',
-    args=["-m", "gitlab_mcp.server"],
+    args=["-m", "multi_tool_agent.gitlab_mcp.server"],
     env={
         "GITLAB_PRIVATE_TOKEN": os.environ.get("GITLAB_PRIVATE_TOKEN")
     }
+)
+
+gitlab_mcp_server = StdioConnectionParams(
+    server_params = server_params
 )
 
 gitlab_tools = MCPToolset(
