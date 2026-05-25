@@ -4,12 +4,12 @@ from fastapi import APIRouter, Request, HTTPException, Header, BackgroundTasks
 from ..agent import root_agent
 from ..config.settings import settings
 
-router = APIRouter()
+webhook_router = APIRouter()
 
 # Securing webhooks via Secret Token
 GITLAB_WEBHOOK_SECRET = settings.GITLAB_WEBHOOK_SECRET
 
-def run_agent_healing_pipeline(project_id: str, project_name: str, pipeline_id: int, commit_sha: str):
+async def run_agent_healing_pipeline(project_id: str, project_name: str, pipeline_id: int, commit_sha: str):
     """Executes the Google ADK healing cycle as a detached background thread."""
     print(f"Triggering ADK Healing workflow for project {project_name}...")
     
@@ -24,11 +24,11 @@ def run_agent_healing_pipeline(project_id: str, project_name: str, pipeline_id: 
     Please examine the failed jobs, fetch the trace logs, fix the error, and create an automated Merge Request.
     """
     
-    response = root_agent.run(prompt)
+    response = await root_agent.execute(prompt)
     print(f"Agent Response: {response.text}")
 
 
-@router.post("/gitlab-webhook")
+@webhook_router.post("/gitlab-webhook")
 async def handle_gitlab_webhook(
     request: Request, 
     background_tasks: BackgroundTasks,

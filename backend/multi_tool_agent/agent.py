@@ -17,6 +17,9 @@ import os
 from google.adk.agents import Agent
 from google.adk.tools.mcp_tool import MCPToolset, StdioConnectionParams
 from mcp import StdioServerParameters
+from dotenv import load_dotenv
+
+load_dotenv()
 
 server_params = StdioServerParameters(
     command='python',

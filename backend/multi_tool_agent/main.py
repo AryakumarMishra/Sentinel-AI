@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.webhook import webhook_router
-from api.routes import routes_router
+from .api.webhook import webhook_router
+from .api.routes import routes_router
 from .config.settings import settings
 
 # Validating configuration on startup

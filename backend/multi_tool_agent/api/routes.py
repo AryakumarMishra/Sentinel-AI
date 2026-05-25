@@ -3,8 +3,8 @@ import json
 import re
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from workflows.pipeline_recovery import PipelineRecoveryWorkflow
-from agent import root_agent
+from ..workflows.pipeline_recovery import PipelineRecoveryWorkflow
+from ..agent import root_agent
 
 routes_router = APIRouter()
 
@@ -18,7 +18,7 @@ class ApprovalDecisionRequest(BaseModel):
 
 
 
-def run_background_agent_job(recovery_id: str, project_path: str, pipeline_id: int, commit_sha: str):
+async def run_background_agent_job(recovery_id: str, project_path: str, pipeline_id: int, commit_sha: str):
     """Executes the Google ADK healing run while logging checkpoints."""
     # Reloading workflow state to track update progress
     state_data = PipelineRecoveryWorkflow.get_recovery_by_id(recovery_id)
@@ -53,7 +53,7 @@ def run_background_agent_job(recovery_id: str, project_path: str, pipeline_id: i
         ```
         """
         
-        agent_response = root_agent.run(prompt)
+        agent_response = await root_agent.execute(prompt)
         tracker.log_step("COMPLETED", "SUCCESS", f"Execution complete. Agent Note: {agent_response.text[:200]}")
 
         # Using regex to extract the JSON payload returned by Gemini
@@ -79,7 +79,7 @@ def run_background_agent_job(recovery_id: str, project_path: str, pipeline_id: i
         tracker.log_step("CRASHED", "FAILED", f"Error encountered during runtime orchestration: {str(e)}")
 
 
-def complete_healing_after_approval(recovery_id: str):
+async def complete_healing_after_approval(recovery_id: str):
     """Executes the final GitLab deployment after Human gives approval"""
     # Reloading workflow state to track update progress
     tracker_data = PipelineRecoveryWorkflow.get_recovery_by_id(recovery_id)
@@ -112,7 +112,7 @@ def complete_healing_after_approval(recovery_id: str):
         3. Open a pull request through create_merge_request.
         """
         
-        agent_response = root_agent.run(execution_prompt)
+        agent_response = await root_agent.execute(execution_prompt)
         tracker.log_step("COMPLETED", "SUCCESS", "Merge request successfully dispatched to GitLab!")
         
     except Exception as e:
