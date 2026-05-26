@@ -1,8 +1,10 @@
-import os
-import asyncio
+import uuid
+from google.adk.runners import InMemoryRunner
+from google.genai import types
 from fastapi import APIRouter, Request, HTTPException, Header, BackgroundTasks
 from ..agent import root_agent
 from ..config.settings import settings
+from ..runtime.adk_runtime import execute_agent
 
 webhook_router = APIRouter()
 
@@ -23,9 +25,20 @@ async def run_agent_healing_pipeline(project_id: str, project_name: str, pipelin
     
     Please examine the failed jobs, fetch the trace logs, fix the error, and create an automated Merge Request.
     """
-    
-    response = await root_agent.execute(prompt)
-    print(f"Agent Response: {response.text}")
+
+    session_id = f"pipeline_fix_{pipeline_id}_{uuid.uuid4().hex[:6]}"
+
+    try:
+        response = await execute_agent(
+            prompt=prompt,
+            session_id=session_id
+        )
+
+        print(response)
+        print(f"\nADK Healing pipeline finished for session: {session_id}")
+
+    except Exception as e:
+        print(f"ADK Healing pipeline crashed: {str(e)}")
 
 
 @webhook_router.post("/gitlab-webhook")

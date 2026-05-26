@@ -3,8 +3,11 @@ import json
 import re
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
+from google.adk.runners import InMemoryRunner
+from google.genai import types
 from ..workflows.pipeline_recovery import PipelineRecoveryWorkflow
 from ..agent import root_agent
+from ..runtime.adk_runtime import execute_agent
 
 routes_router = APIRouter()
 
@@ -18,7 +21,12 @@ class ApprovalDecisionRequest(BaseModel):
 
 
 
-async def run_background_agent_job(recovery_id: str, project_path: str, pipeline_id: int, commit_sha: str):
+async def run_background_agent_job(
+        recovery_id: str, 
+        project_path: str, 
+        pipeline_id: int, 
+        commit_sha: str
+    ):
     """Executes the Google ADK healing run while logging checkpoints."""
     # Reloading workflow state to track update progress
     state_data = PipelineRecoveryWorkflow.get_recovery_by_id(recovery_id)
@@ -53,11 +61,15 @@ async def run_background_agent_job(recovery_id: str, project_path: str, pipeline
         ```
         """
         
-        agent_response = await root_agent.execute(prompt)
-        tracker.log_step("COMPLETED", "SUCCESS", f"Execution complete. Agent Note: {agent_response.text[:200]}")
+        full_response_text = await execute_agent(
+            prompt=prompt,
+            session_id=f"analysis_{recovery_id}"
+        )
+
+        tracker.log_step("COMPLETED", "SUCCESS", f"Execution complete. Agent Note: {full_response_text[:200]}")
 
         # Using regex to extract the JSON payload returned by Gemini
-        match = re.search(r"```json\s*(.*?)\s*```", agent_response.text, re.DOTALL)
+        match = re.search(r"```json\s*(.*?)\s*```", full_response_text, re.DOTALL)
         if match:
             fix_json = json.loads(match.group(1))
             
@@ -112,8 +124,12 @@ async def complete_healing_after_approval(recovery_id: str):
         3. Open a pull request through create_merge_request.
         """
         
-        agent_response = await root_agent.execute(execution_prompt)
-        tracker.log_step("COMPLETED", "SUCCESS", "Merge request successfully dispatched to GitLab!")
+        response = await execute_agent(
+            prompt=execution_prompt,
+            session_id=f"deploy_{recovery_id}"
+        )
+
+        tracker.log_step("COMPLETED", "SUCCESS", f"Merge request successfully dispatched to GitLab! {response[:200]}")
         
     except Exception as e:
         tracker.log_step("CRASHED", "FAILED", f"Deployment execution failed: {str(e)}")

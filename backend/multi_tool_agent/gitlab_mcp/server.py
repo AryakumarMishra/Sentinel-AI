@@ -101,7 +101,7 @@ async def read_repository_files(project_path: str, file_path: str, ref: str = "m
     url = f"{GL_BASE}/projects/{project_path}/repository/files/{encoded_path}/raw"
     params = {"ref":ref}
 
-    async with httpx.AsyncClient as client:
+    async with httpx.AsyncClient() as client:
         response = await client.get(url, headers=HEADERS, params=params)
         
         if response.status_code != 200:

@@ -165,6 +165,9 @@ backend/.env
 # VS Code
 .vscode/
 
+# recovery_states
+recovery_states/
+
 # Spyder project settings
 .spyderproject
 .spyproject

@@ -21,6 +21,10 @@ app.add_middleware(
 app.include_router(webhook_router, prefix="/api")
 app.include_router(routes_router, prefix="/api")
 
+import os
+print("GOOGLE_API_KEY:", os.getenv("GOOGLE_API_KEY"))
+print("GEMINI_API_KEY:", os.getenv("GEMINI_API_KEY"))
+
 @app.get("/health")
 def get_health():
     return {"status":"online", "service": "Sentinel AI Engine"}

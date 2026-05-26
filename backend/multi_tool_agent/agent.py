@@ -19,7 +19,7 @@ from google.adk.tools.mcp_tool import MCPToolset, StdioConnectionParams
 from mcp import StdioServerParameters
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 server_params = StdioServerParameters(
     command='python',
