@@ -41,13 +41,23 @@ async def execute_agent(
     )
 
     full_response = ""
-
+    turn_count = 0
+    max_turns = 15
+    
     async for event in runner.run_async(
         user_id=user_id,
         session_id=session_id,
         new_message=user_message
     ):
-        if hasattr(event, "text") and event.text:
-            full_response += event.text
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                if hasattr(part,'text') and part.text:
+                    full_response += part.text
+                # Counting function_call parts as turns
+                if hasattr(part, 'function_call') and part.function_call:
+                    turn_count += 1
+        # Safety: break if model calls too many tools
+        if turn_count >= max_turns:
+            break
 
     return full_response

@@ -41,25 +41,24 @@ async def run_background_agent_job(
         tracker.log_step("ANALYZING", "IN_PROGRESS", "Gemini exploring failed job runs...")
         
         prompt = f"""
-        Analyze this failure event:
-        Project Path: {project_path}
-        Pipeline ID: {pipeline_id}
-        
-        Instructions:
-        1. Call get_failed_jobs and get_pipeline_logs.
-        2. Identify the broken file path, read it with read_repository_file.
-        3. Formulate a precise code fix correction.
-        4. STOP HERE. Do not call any modification tools (do not branch, commit or open MRs).
-        
-        Output your recommendation strictly as a JSON object inside markdown backticks:
-        ```json
-        {{
-            "file_path": "path/to/broken_file.py",
-            "explanation": "Brief explanation of what broke",
-            "content": "The exact full replacement text content for the file"
-        }}
-        ```
-        """
+            SYSTEM OVERRIDE: Ignore your default automation instructions for this turn. You are in READ-ONLY ANALYSIS MODE. Do NOT call create_branch, commit_file_change, or create_merge_request.
+            Analyze this failure event:
+            Project Path: {project_path}
+            Pipeline ID: {pipeline_id}
+            Steps:
+            1. Call get_failed_jobs to find the failed job ID.
+            2. Call get_pipeline_logs with that job ID to get error traces.
+            3. Call read_repository_files to read the broken file.
+            4. After receiving ALL tool results, STOP calling tools.
+            Now, output ONLY a JSON block — no conversation, no explanation, no extra text:
+            ```json
+            {{
+                "file_path": "path/to/broken_file.py",
+                "explanation": "Brief explanation of what broke",
+                "content": "The exact full replacement text content for the file"
+            }}
+            Do NOT call any more tools. Do NOT include any text outside the JSON block.
+            """
         
         full_response_text = await execute_agent(
             prompt=prompt,
@@ -69,10 +68,46 @@ async def run_background_agent_job(
         tracker.log_step("COMPLETED", "SUCCESS", f"Execution complete. Agent Note: {full_response_text[:200]}")
 
         # Using regex to extract the JSON payload returned by Gemini
+        fix_json = None
+
         match = re.search(r"```json\s*(.*?)\s*```", full_response_text, re.DOTALL)
         if match:
-            fix_json = json.loads(match.group(1))
-            
+            try:
+                fix_json = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                fix_json = None
+        
+        if not fix_json:
+            match = re.search(r"```\s*(.*?)\s*```", full_response_text, re.DOTALL)
+            if match:
+                try:
+                    fix_json = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    fix_json = None
+        
+        if not fix_json:
+             match = re.search(r'\{\s*"file_path"\s*:', full_response_text, re.DOTALL)
+             if match:
+                try:
+                    #  Finding the matching closing brace
+                    start = match.start()
+                    depth = 0
+                    end = start
+                    for i, ch in enumerate(full_response_text[start:]):
+                        if ch == '{':
+                            depth += 1
+                        elif ch == '}':
+                            depth -= 1
+                            if depth == 0:
+                                end = start + i + 1
+
+                    candidate = full_response_text[start:end]
+                    fix_json = json.loads(candidate)                            
+                except (json.JSONDecodeError, ValueError):
+                    fix_json = None
+
+        
+        if fix_json:
             # Saving the proposed patch to state storage
             file_path = os.path.join("recovery_states", f"{recovery_id}.json")
             state_data = PipelineRecoveryWorkflow.get_recovery_by_id(recovery_id)
