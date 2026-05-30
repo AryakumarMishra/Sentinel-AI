@@ -16,15 +16,30 @@ async def run_agent_healing_pipeline(project_id: str, project_name: str, pipelin
     print(f"Triggering ADK Healing workflow for project {project_name}...")
     
     # A runtime prompt dynamically targeting the failure context
-    prompt = f"""
-    GitLab Pipeline failure detected!
-    - Project ID: {project_id}
-    - Project Name: {project_name}
-    - Failed Pipeline ID: {pipeline_id}
-    - Failing Commit SHA: {commit_sha}
-    
-    Please examine the failed jobs, fetch the trace logs, fix the error, and create an automated Merge Request.
-    """
+    prompt =  f"""
+        SYSTEM OVERRIDE: You are in AUTONOMOUS HEALING MODE. Your goal is to fix this pipeline failure end-to-end.
+
+        Pipeline failure context:
+        - Project Path: {project_name}
+        - Pipeline ID: {pipeline_id}
+        - Failing Commit SHA: {commit_sha}
+
+        Follow this exact operational loop:
+
+        Step 1 — Call get_failed_jobs(project_path="{project_name}", pipeline_id={pipeline_id})
+
+        Step 2 — From Step 1, extract the job_id, then call get_pipeline_logs(project_path="{project_name}", job_id=<the job_id>)
+
+        Step 3 — From the logs, find the exact file path that caused the error. Call read_repository_files(project_path="{project_name}", file_path="<the exact path>", ref="{commit_sha}")
+
+        Step 4 — Generate the corrected file content and call create_branch(project_path="{project_name}", branch_name="fix/pipeline-{pipeline_id}", ref="{commit_sha}")
+
+        Step 5 — Call commit_file_change(project_path="{project_name}", branch_name="fix/pipeline-{pipeline_id}", file_path="<the exact file path>", commit_message="[Sentinel AI] Automated pipeline fix", file_content="<the corrected content>")
+
+        Step 6 — Call create_merge_request(project_path="{project_name}", source_branch="fix/pipeline-{pipeline_id}", title="[Sentinel AI] Automated pipeline fix", description="Sentinel AI automatically fixed the failed pipeline.\\n\\nRoot cause extracted from pipeline #{pipeline_id} logs.")
+
+        After completion, output a brief summary of what was fixed.
+        """
 
     session_id = f"pipeline_fix_{pipeline_id}_{uuid.uuid4().hex[:6]}"
 

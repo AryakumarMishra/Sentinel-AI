@@ -158,6 +158,10 @@ async def commit_file_change(project_path: str, branch_name: str, file_path: str
 
         if response.status_code == 200:
             return f"Success: Modified file '{file_path}' successfully on branch '{branch_name}'."
+        if response.status_code == 400:
+            response = await client.post(url, headers=HEADERS, json=payload) # If PUT request fails, we use POST (file may not exist) 
+            if response.status_code == 201:
+                return f"Success: Created file '{file_path}' successfully on branch '{branch_name}'"
         return f"Error updating file: {response.status_code} - {response.text}"
 
 
@@ -173,10 +177,19 @@ async def create_merge_request(project_path: str, source_branch: str, title: str
     }
     
     async with httpx.AsyncClient() as client:
-        resp = await client.post(url, headers=HEADERS, json=payload)
-        return str(resp.json())
+        response = await client.post(url, headers=HEADERS, json=payload)
+
+        if response.status_code == 201:
+            return f"Success: Merge Request created. {response.json()}"
+        return f"Error creating Merge Request: {response.status_code} - {response.text}"
     
 
 
 if __name__ == "__main__":
-    mcp.run()
+    # Logging and handling MCP Server errors
+    try:
+        mcp.run()
+    except Exception as e:
+        import sys
+        print(f"MCP SERVER CRASHED: {e}", file=sys.stderr)
+        sys.exit(1)
