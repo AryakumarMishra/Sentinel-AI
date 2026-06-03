@@ -48,16 +48,19 @@ async def run_background_agent_job(
             - Ref: {commit_sha}
 
             Steps:
-            1. Call get_failed_jobs(project_path="{project_path}", pipeline_id={pipeline_id}) to find the failed job.
-            2. From the result, extract the job_id, then call get_pipeline_logs(project_path="{project_path}", job_id=<job_id>) to get the error trace.
-            3. From the logs, identify the file path mentioned in the error. Call read_repository_files(project_path="{project_path}", file_path="<path from logs>", ref="{commit_sha}") to read it. Look at its imports and function calls — the real bug is likely in a dependency, not this file.
-            4. If the file from Step 3 imports functions from another module in the same repo, call read_repository_files again to read THAT dependency file — that's where the actual bug lives.
+            1. Call get_failed_jobs(project_path="{project_path}", pipeline_id={pipeline_id})
+            2. From the result, extract the job_id, then call get_pipeline_logs(project_path="{project_path}", job_id=<job_id>)
+            3. From the logs, identify the file mentioned in the error (e.g., src/test_math.py:4). Call read_repository_files(project_path="{project_path}", file_path="<path from logs>", ref="{commit_sha}") to read it. Note which directory the file is in and examine its import statements.
+            4. If the file imports from another module (e.g., "from math_operations import ..."), the source file may be in the same directory OR at the project root. Try read_repository_files at each possible path:
+            - First try: same directory as the test file (e.g., src/math_operations.py)
+            - Then try: one level up (e.g., math_operations.py)
+            Use whichever returns file content successfully — that's the real bug location.
 
-            After all steps, output a JSON block with the fix for the FILE THAT CONTAINS THE BUG:
-
+            After all steps, output a JSON block with the fix for the BUGGY SOURCE FILE:
+            ```json
             {{
-                "file_path": "<the path you read>",
-                "explanation": "<root cause from the logs>",
+                "file_path": "<the dependency file path that needs fixing>",
+                "explanation": "<root cause>",
                 "content": "<full corrected file content>"
             }}
             """
