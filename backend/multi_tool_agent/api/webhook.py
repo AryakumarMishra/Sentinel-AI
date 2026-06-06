@@ -1,59 +1,120 @@
 import uuid
-from google.adk.runners import InMemoryRunner
-from google.genai import types
+import time
+import asyncio
 from fastapi import APIRouter, Request, HTTPException, Header, BackgroundTasks
-from ..agent import root_agent
+from ..workflows.pipeline_recovery import PipelineRecoveryWorkflow
 from ..config.settings import settings
 from ..runtime.adk_runtime import execute_agent
+from ..utils import parse_fix_json, verify_file_exists
+from ..utils import HEALING_SEMAPHORE
+
 
 webhook_router = APIRouter()
-
-# Securing webhooks via Secret Token
 GITLAB_WEBHOOK_SECRET = settings.GITLAB_WEBHOOK_SECRET
 
-async def run_agent_healing_pipeline(project_id: str, project_name: str, pipeline_id: int, commit_sha: str):
-    """Executes the Google ADK healing cycle as a detached background thread."""
-    print(f"Triggering ADK Healing workflow for project {project_name}...")
+ACTIVE_LOCKS: dict[str, dict] = {}
+LOCK_TTL = 900 # seconds
+
+
+def _check_and_acquire_lock(project_name: str, recovery_id: str) -> bool:
+    """Returns True if lock was aquired, False if already healing."""
+    now = time.time()
+
+    # TTL gaurd: clean expired locks
+    expired = [k for k, v in ACTIVE_LOCKS.items() if now - v["locked_at"] > LOCK_TTL]
+    for k in expired:
+        del ACTIVE_LOCKS[k]
     
-    # A runtime prompt dynamically targeting the failure context
-    prompt =  f"""
-        SYSTEM OVERRIDE: You are in AUTONOMOUS HEALING MODE. Your goal is to fix this pipeline failure end-to-end.
-
-        Pipeline failure context:
-        - Project Path: {project_name}
-        - Pipeline ID: {pipeline_id}
-        - Failing Commit SHA: {commit_sha}
-
-        Follow this exact operational loop:
-
-        Step 1 — Call get_failed_jobs(project_path="{project_name}", pipeline_id={pipeline_id})
-
-        Step 2 — From Step 1, extract the job_id, then call get_pipeline_logs(project_path="{project_name}", job_id=<the job_id>)
-
-        Step 3 — From the logs, find the exact file path that caused the error. Call read_repository_files(project_path="{project_name}", file_path="<the exact path>", ref="{commit_sha}")
-
-        Step 4 — Generate the corrected file content and call create_branch(project_path="{project_name}", branch_name="fix/pipeline-{pipeline_id}", ref="{commit_sha}")
-
-        Step 5 — Call commit_file_change(project_path="{project_name}", branch_name="fix/pipeline-{pipeline_id}", file_path="<the exact file path>", commit_message="[Sentinel AI] Automated pipeline fix", file_content="<the corrected content>")
-
-        Step 6 — Call create_merge_request(project_path="{project_name}", source_branch="fix/pipeline-{pipeline_id}", title="[Sentinel AI] Automated pipeline fix", description="Sentinel AI automatically fixed the failed pipeline.\\n\\nRoot cause extracted from pipeline #{pipeline_id} logs.")
-
-        After completion, output a brief summary of what was fixed.
-        """
-
-    session_id = f"pipeline_fix_{pipeline_id}_{uuid.uuid4().hex[:6]}"
-
-    try:
-        response = await execute_agent(
-            prompt=prompt,
-            session_id=session_id
+    if project_name in ACTIVE_LOCKS:
+        # Double-checking against state file (in case the server restarted)
+        existing = PipelineRecoveryWorkflow.get_recovery_by_id(
+            ACTIVE_LOCKS[project_name]['recovery_id']
         )
+        if existing and existing.get("status") in (
+            "TRIGGERED", "ANALYZING", "AWAITING_APPROVAL"
+        ):
+            return False
+        # Deleting stale lock
+        del ACTIVE_LOCKS[project_name]
+    
+    ACTIVE_LOCKS[project_name] = {"recovery_id": recovery_id, "locked_at": now}
+    return True
 
-        print(response)
-        print(f"\nADK Healing pipeline finished for session: {session_id}")
 
-    except Exception as e:
-        print(f"ADK Healing pipeline crashed: {str(e)}")
+async def run_agent_healing_pipeline(
+        project_name: str, 
+        pipeline_id: int, 
+        commit_sha: str, 
+        recovery_id: str
+    ):
+    async with HEALING_SEMAPHORE:
+        """Called by backgroud worker. Gated by semaphore + lock lifecycle"""
+        tracker = PipelineRecoveryWorkflow(pipeline_id, project_name, commit_sha)
+        tracker.recovery_id = recovery_id
+
+        try:
+            tracker.log_step("TRIGGERED", "IN_PROGRESS", "Webhook_received - starting automated healing")
+        
+            # A runtime prompt dynamically targeting the failure context
+            prompt =  f"""
+                    You are analyzing a failed CI/CD pipeline. Use the available tools to diagnose the problem, but do NOT run any deployment actions (create_branch, commit_file_change, create_merge_request).
+
+                    Pipeline:
+                    - Project Path: {project_name}
+                    - Pipeline ID: {pipeline_id}
+                    - Ref: {commit_sha}
+
+                    Steps:
+                    1. Call get_failed_jobs(project_path="{project_name}", pipeline_id={pipeline_id})
+                    2. From the result, extract the job_id, then call get_pipeline_logs(project_path="{project_name}", job_id=<job_id>)
+                    3. From the logs, identify the file mentioned in the error (e.g., src/test_math.py:4). Call read_repository_files(project_path="{project_name}", file_path="<path from logs>", ref="{commit_sha}") to read it. Note which directory the file is in and examine its import statements.
+                    4. If the file imports from another module (e.g., "from math_operations import ..."), the source file may be in the same directory OR at the project root. Try read_repository_files at each possible path:
+                    - First try: same directory as the test file (e.g., src/math_operations.py)
+                    - Then try: one level up (e.g., math_operations.py)
+                    Use whichever returns file content successfully — that's the real bug location.
+
+                    After all steps, output a JSON block with the fix for the BUGGY SOURCE FILE:
+                    ```json
+                    {{
+                        "file_path": "<the dependency file path that needs fixing>",
+                        "explanation": "<root cause>",
+                        "content": "<full corrected file content>"
+                    }}
+                    """
+            tracker.log_step("ANALYZING", "IN_PROGRESS", "Gemini diagnosing failure....")
+
+            response = await execute_agent(
+                prompt=prompt,
+                session_id=f"analysis_{recovery_id}"
+            )
+
+            fix_json = parse_fix_json(response)
+            if not fix_json:
+                tracker.log_step("COMPLETED", "FAILED", "Failed to parse JSON structure from agent")
+                return
+            
+            missing = {"file_path", "explanation", "content"} - set(fix_json.keys())
+            if missing:
+                tracker.log_step("COMPLETED", "FAILED", f"AI patch missing fields: {', '.join(sorted(missing))}")
+                return
+            
+            exists = await verify_file_exists(
+                project_name, fix_json["file_path"], commit_sha
+            )
+            if not exists:
+                tracker.log_step("COMPLETED", "FAILED", f"Agent hallucinated path'{fix_json['file_path']}'")
+                return
+            
+            tracker.proposed_fix = fix_json
+            tracker.log_step("AWAITING_APPROVAL", "IN_PROGRESS", "AI patch ready. Waiting for human approval")
+        
+        except Exception as e:
+            tracker.log_step("CRASHED", "FAILED", f"Healing pipeline failed: {str(e)}")
+        
+        finally:
+            ACTIVE_LOCKS.pop(project_name, None)
+
+        
 
 
 @webhook_router.post("/gitlab-webhook")
@@ -68,30 +129,29 @@ async def handle_gitlab_webhook(
 
     # Extracting the payload data as JSON
     payload = await request.json()
+    if payload.get("object_kind") != "pipeline":
+        return {"status": "ignored", "message": "Not a pipeline event"}
     
-    # Detecting what type of event sent this hook
-    object_kind = payload.get("object_kind") # Expected: 'pipeline' or 'deployment' or 'build'
+    attributes = payload.get("object_attributes", {})
+    if attributes.get("status") != "failed":
+        return {"status": "ignored", "message": "Pipeline not in a failed state"}
     
-    if object_kind == "pipeline":
-        attributes = payload.get("object_attributes", {})
-        status = attributes.get("status") # 'pending', 'running', 'success', 'failed'
-        
-        # We only care if there is a failure
-        if status == "failed":
-            project_id = payload.get("project", {}).get("id")
-            project_name = payload.get("project", {}).get("path_with_namespace")
-            pipeline_id = attributes.get("id")
-            commit_sha = attributes.get("sha")
+    project_name = payload.get("project", {}).get("path_with_namespace")
+    pipeline_id = attributes.get("id")
+    commit_sha = attributes.get("sha")
+
+    # Generating the recovery_id upfront for the lock
+    recovery_id = str(uuid.uuid4())
+
+    if not _check_and_acquire_lock(project_name, recovery_id):
+        return {"status": "skipped", "message": f"Already healing {project_name} - webhook skipped"}
             
-            # Delegating to background workers so GitLab gets an immediate HTTP 200 back
-            background_tasks.add_task(
-                run_agent_healing_pipeline, 
-                project_id=str(project_id), 
-                project_name=project_name, 
-                pipeline_id=pipeline_id, 
-                commit_sha=commit_sha
-            )
-            return {"status": "processing", "message": "Failing pipeline passed to Sentinel Agent."}
-            
-    # Ignoring passing/running stages to prevent unnecessary token usage 
-    return {"status": "ignored", "message": "Not a failing pipeline event status."}
+    # Delegating to background workers so GitLab gets an immediate HTTP 200 back
+    background_tasks.add_task(
+        run_agent_healing_pipeline,
+        project_name=project_name, 
+        recovery_id=recovery_id,
+        pipeline_id=pipeline_id, 
+        commit_sha=commit_sha
+    )
+    return {"status": "processing", "recovery_id": recovery_id, "message": "Failing pipeline passed to Sentinel Agent."}

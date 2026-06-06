@@ -2,11 +2,14 @@ import os
 import json
 import re
 import httpx
+import asyncio
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from ..config.settings import settings
 from pydantic import BaseModel
 from ..workflows.pipeline_recovery import PipelineRecoveryWorkflow
 from ..runtime.adk_runtime import execute_agent
+from ..utils import parse_fix_json, verify_file_exists
+from ..utils import HEALING_SEMAPHORE
 
 routes_router = APIRouter()
 
@@ -26,130 +29,75 @@ async def run_background_agent_job(
         pipeline_id: int, 
         commit_sha: str
     ):
-    """Executes the Google ADK healing run while logging checkpoints."""
-    # Reloading workflow state to track update progress
-    state_data = PipelineRecoveryWorkflow.get_recovery_by_id(recovery_id)
-    if not state_data:
-        return
-    
-    # Rehydrating tracker class
-    tracker = PipelineRecoveryWorkflow(pipeline_id, project_path, commit_sha)
-    tracker.recovery_id = recovery_id
-    
-    try:
-        tracker.log_step("ANALYZING", "IN_PROGRESS", "Gemini exploring failed job runs...")
+    async with HEALING_SEMAPHORE:
+        """Executes the Google ADK healing run while logging checkpoints."""
+        # Reloading workflow state to track update progress
+        state_data = PipelineRecoveryWorkflow.get_recovery_by_id(recovery_id)
+        if not state_data:
+            return
         
-        prompt = f"""
-            You are analyzing a failed CI/CD pipeline. Use the available tools to diagnose the problem, but do NOT run any deployment actions (create_branch, commit_file_change, create_merge_request).
-
-            Pipeline:
-            - Project Path: {project_path}
-            - Pipeline ID: {pipeline_id}
-            - Ref: {commit_sha}
-
-            Steps:
-            1. Call get_failed_jobs(project_path="{project_path}", pipeline_id={pipeline_id})
-            2. From the result, extract the job_id, then call get_pipeline_logs(project_path="{project_path}", job_id=<job_id>)
-            3. From the logs, identify the file mentioned in the error (e.g., src/test_math.py:4). Call read_repository_files(project_path="{project_path}", file_path="<path from logs>", ref="{commit_sha}") to read it. Note which directory the file is in and examine its import statements.
-            4. If the file imports from another module (e.g., "from math_operations import ..."), the source file may be in the same directory OR at the project root. Try read_repository_files at each possible path:
-            - First try: same directory as the test file (e.g., src/math_operations.py)
-            - Then try: one level up (e.g., math_operations.py)
-            Use whichever returns file content successfully — that's the real bug location.
-
-            After all steps, output a JSON block with the fix for the BUGGY SOURCE FILE:
-            ```json
-            {{
-                "file_path": "<the dependency file path that needs fixing>",
-                "explanation": "<root cause>",
-                "content": "<full corrected file content>"
-            }}
-            """
+        # Rehydrating tracker class
+        tracker = PipelineRecoveryWorkflow(pipeline_id, project_path, commit_sha)
+        tracker.recovery_id = recovery_id
         
-        full_response_text = await execute_agent(
-            prompt=prompt,
-            session_id=f"analysis_{recovery_id}"
-        )
-
-        tracker.log_step("COMPLETED", "SUCCESS", f"Execution complete. Agent Note: {full_response_text[:200]}")
-
-        # Using regex to extract the JSON payload returned by Gemini
-        fix_json = None
-
-        match = re.search(r"```json\s*(.*?)\s*```", full_response_text, re.DOTALL)
-        if match:
-            try:
-                fix_json = json.loads(match.group(1))
-            except json.JSONDecodeError:
-                fix_json = None
-        
-        if not fix_json:
-            match = re.search(r"```\s*(.*?)\s*```", full_response_text, re.DOTALL)
-            if match:
-                try:
-                    fix_json = json.loads(match.group(1))
-                except json.JSONDecodeError:
-                    fix_json = None
-        
-        if not fix_json:
-             match = re.search(r'\{\s*"file_path"\s*:', full_response_text, re.DOTALL)
-             if match:
-                start = match.start()
-                depth = 0
-                in_string = False
-                escaped = False
-                for i, ch in enumerate(full_response_text[start:]):
-                    if escaped:
-                        escaped = False
-                        continue
-                    if ch == '\\':
-                        escaped = True
-                        continue
-                    if ch == '"' and not escaped:
-                        in_string = not in_string
-                        continue
-                    if in_string:
-                        continue
-                    if ch == '{':
-                        depth += 1
-                    elif ch == '}':
-                        depth -= 1
-                        if depth == 0:
-                            try:
-                                candidate = full_response_text[start:start + i + 1]
-                                fix_json = json.loads(candidate)
-                            except (json.JSONDecodeError, ValueError):
-                                fix_json = None
-                            break
-
-        
-        if fix_json:
-            required_keys = {'file_path', 'explanation', 'content'}
-            missing = required_keys - set(fix_json.keys())
-            if missing:
-                tracker.log_step("CRASHED", "FAILED", f"AI patch missing required fields: {', '.join(sorted(missing))}")
-            else:
-                # Verify the claimed file_path actually exists in the repository
-                try:
-                    encoded = fix_json['file_path'].replace("/", "%2F")
-                    verify_url = f"{settings.GITLAB_BASE_URL}/projects/{project_path}/repository/files/{encoded}/raw?ref={commit_sha}"
-                    headers = {"PRIVATE-TOKEN": settings.GITLAB_PRIVATE_TOKEN}
-                    async with httpx.AsyncClient() as client:
-                        resp = await client.get(verify_url, headers=headers)
-                    if resp.status_code != 200:
-                        tracker.log_step("CRASHED", "FAILED", f"Agent hallucinated file path '{fix_json['file_path']}' — does not exist in repo (HTTP {resp.status_code})")
-                        fix_json = None
-                    else:
-                        tracker.proposed_fix = fix_json
-                        tracker.log_step("AWAITING_APPROVAL", "IN_PROGRESS", "AI patch generated. Holding for engineer verification review.")
-                except Exception as e:
-                    tracker.log_step("CRASHED", "FAILED", f"File verification failed: {str(e)}")
-                    fix_json = None
-        else:
-            tracker.log_step("CRASHED", "FAILED", "Failed to parse structured JSON repair patch matrix from agent response.")
+        try:
+            tracker.log_step("ANALYZING", "IN_PROGRESS", "Gemini exploring failed job runs...")
             
-        
-    except Exception as e:
-        tracker.log_step("CRASHED", "FAILED", f"Error encountered during runtime orchestration: {str(e)}")
+            prompt = f"""
+                You are analyzing a failed CI/CD pipeline. Use the available tools to diagnose the problem, but do NOT run any deployment actions (create_branch, commit_file_change, create_merge_request).
+
+                Pipeline:
+                - Project Path: {project_path}
+                - Pipeline ID: {pipeline_id}
+                - Ref: {commit_sha}
+
+                Steps:
+                1. Call get_failed_jobs(project_path="{project_path}", pipeline_id={pipeline_id})
+                2. From the result, extract the job_id, then call get_pipeline_logs(project_path="{project_path}", job_id=<job_id>)
+                3. From the logs, identify the file mentioned in the error (e.g., src/test_math.py:4). Call read_repository_files(project_path="{project_path}", file_path="<path from logs>", ref="{commit_sha}") to read it. Note which directory the file is in and examine its import statements.
+                4. If the file imports from another module (e.g., "from math_operations import ..."), the source file may be in the same directory OR at the project root. Try read_repository_files at each possible path:
+                - First try: same directory as the test file (e.g., src/math_operations.py)
+                - Then try: one level up (e.g., math_operations.py)
+                Use whichever returns file content successfully — that's the real bug location.
+
+                After all steps, output a JSON block with the fix for the BUGGY SOURCE FILE:
+                ```json
+                {{
+                    "file_path": "<the dependency file path that needs fixing>",
+                    "explanation": "<root cause>",
+                    "content": "<full corrected file content>"
+                }}
+                """
+            
+            full_response_text = await execute_agent(
+                prompt=prompt,
+                session_id=f"analysis_{recovery_id}"
+            )
+
+            tracker.log_step("COMPLETED", "SUCCESS", f"Execution complete. Agent Note: {full_response_text[:200]}")
+
+            fix_json = parse_fix_json(full_response_text)
+            
+            if fix_json:
+                required_keys = {'file_path', 'explanation', 'content'}
+                missing = required_keys - set(fix_json.keys())
+                if missing:
+                    tracker.log_step("CRASHED", "FAILED", f"AI patch missing required fields: {', '.join(sorted(missing))}")
+                else:
+                    exists = await verify_file_exists(project_path, fix_json["file_path"], commit_sha)
+                    
+                    if not exists:
+                        tracker.log_step("COMPLETED", "FAILED", f"Agent hallucinated path'{fix_json['file_path']}'")
+                        return
+                    
+                    tracker.proposed_fix = fix_json
+                    tracker.log_step("AWAITING_APPROVAL", "IN_PROGRESS", "AI patch ready. Waiting for human approval")
+            else:
+                tracker.log_step("CRASHED", "FAILED", "Failed to parse structured JSON repair patch matrix from agent response.")
+                
+            
+        except Exception as e:
+            tracker.log_step("CRASHED", "FAILED", f"Error encountered during runtime orchestration: {str(e)}")
 
 
 async def complete_healing_after_approval(recovery_id: str):
@@ -248,7 +196,7 @@ def get_recovery_detail(recovery_id: str):
 def trigger_manual_healing(payload: ManualTriggerRequest, background_tasks: BackgroundTasks):
     """Allows developers to test or run fixes on-demand from the UI."""
     # Creating the initial tracking state record
-    tracker = PipelineRecoveryWorkflow(payload.project_path, payload.project_path, payload.commit_sha)
+    tracker = PipelineRecoveryWorkflow(payload.pipeline_id, payload.project_path, payload.commit_sha)
     
     # Offloading to async processing threads to avoid API lock-ups
     background_tasks.add_task(
