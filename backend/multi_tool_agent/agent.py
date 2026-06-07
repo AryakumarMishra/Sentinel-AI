@@ -41,7 +41,7 @@ gitlab_tools = MCPToolset(
 
 root_agent = Agent(
     name="sentinel_ai",
-    model="gemini-2.5-flash-lite",
+    model="gemini-3.1-flash-lite",
     description=(
         "Agent to assist and fix CI/CD or DevOps failures in deployments on GitLab."
     ),
