@@ -10,11 +10,12 @@ export default function DashboardPage() {
 
   // Poll our FastAPI state file directory every 3 seconds for live timeline updates
   useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null;
+
     async function fetchData() {
       try {
         const data = await api.getRecoveries();
-        // Sort newest runs at the top
-        setRecoveries(data.sort((a,b) => b.start_time.localeCompare(a.start_time)));
+        setRecoveries(data.sort((a, b) => b.start_time.localeCompare(a.start_time)));
       } catch (err) {
         console.error(err);
       } finally {
@@ -22,9 +23,41 @@ export default function DashboardPage() {
       }
     }
 
-    fetchData();
-    const interval = setInterval(fetchData, 3000);
-    return () => clearInterval(interval);
+    function startPolling() {
+      if (!intervalId) {
+        fetchData(); // Run immediately on focus/mount
+        intervalId = setInterval(fetchData, 10000); // 10-second smart polling interval
+      }
+    }
+
+    function stopPolling() {
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    }
+
+    // Handle visibility changes (tab switching)
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        startPolling();
+      }
+    };
+
+    // Initial active state setup
+    if (!document.hidden) {
+      startPolling();
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // Clean up completely on unmount
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, []);
 
   // Simple clean formatting utility function for ISO timestamps

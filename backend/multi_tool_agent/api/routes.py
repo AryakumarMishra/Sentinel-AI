@@ -122,16 +122,17 @@ async def complete_healing_after_approval(recovery_id: str):
             return
 
         project_path = tracker.project_name
+        encoded_project_path = project_path.replace("/", "%2F")
         branch_name = f"fix/pipeline-{tracker_data['pipeline_id']}"
         file_path = fix_info['file_path']
-        encoded_path = file_path.replace("/", "%2F")
+        encoded_file_path = file_path.replace("/", "%2F")
         headers = {"PRIVATE-TOKEN": settings.GITLAB_PRIVATE_TOKEN}
         base = settings.GITLAB_BASE_URL
 
         async with httpx.AsyncClient() as client:
             # Creating branch
             branch_resp = await client.post(
-                f"{base}/projects/{project_path}/repository/branches",
+                f"{base}/projects/{encoded_project_path}/repository/branches",
                 headers=headers,
                 json={"branch": branch_name, "ref": "main"}
             )
@@ -140,7 +141,7 @@ async def complete_healing_after_approval(recovery_id: str):
                 return
 
             # Committing the file (PUT to update, fallback to POST to create)
-            file_url = f"{base}/projects/{project_path}/repository/files/{encoded_path}"
+            file_url = f"{base}/projects/{encoded_project_path}/repository/files/{encoded_file_path}"
             file_payload = {
                 "branch": branch_name,
                 "commit_message": f"[Sentinel AI] Automated fix: {fix_info.get('explanation', 'pipeline remediation')}",
@@ -155,7 +156,7 @@ async def complete_healing_after_approval(recovery_id: str):
 
             # Creating the Merge Request 
             mr_resp = await client.post(
-                f"{base}/projects/{project_path}/merge_requests",
+                f"{base}/projects/{encoded_project_path}/merge_requests",
                 headers=headers,
                 json={
                     "source_branch": branch_name,

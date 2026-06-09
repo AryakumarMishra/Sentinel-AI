@@ -11,6 +11,9 @@ export default function RecoveryDetailPage({ params }: { params: Promise<{ id: s
   const [actioning, setActioning] = useState<boolean>(false);
 
   useEffect(() => {
+    if (!id) return;
+    let intervalId: NodeJS.Timeout | null = null;
+
     async function fetchDetail() {
       try {
         const data = await api.getRecoveryDetail(id);
@@ -22,10 +25,38 @@ export default function RecoveryDetailPage({ params }: { params: Promise<{ id: s
       }
     }
 
-    fetchDetail();
-    // Poll updates every 2 seconds to render live timeline updates from our backend workers
-    const interval = setInterval(fetchDetail, 2000);
-    return () => clearInterval(interval);
+    function startPolling() {
+      if (!intervalId) {
+        fetchDetail(); // Run immediately on focus/mount
+        intervalId = setInterval(fetchDetail, 6000); // 6-second tracking interval
+      }
+    }
+
+    function stopPolling() {
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        startPolling();
+      }
+    };
+
+    if (!document.hidden) {
+      startPolling();
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [id]);
 
   const handleDecision = async (approve: boolean) => {
