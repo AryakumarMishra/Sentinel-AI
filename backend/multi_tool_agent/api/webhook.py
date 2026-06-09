@@ -1,6 +1,9 @@
 import uuid
 import time
 import asyncio
+import hashlib
+import hmac
+import base64
 from fastapi import APIRouter, Request, HTTPException, Header, BackgroundTasks
 from ..workflows.pipeline_recovery import PipelineRecoveryWorkflow
 from ..config.settings import settings
@@ -121,11 +124,25 @@ async def run_agent_healing_pipeline(
 async def handle_gitlab_webhook(
     request: Request, 
     background_tasks: BackgroundTasks,
-    x_gitlab_token: str = Header(None) # Token matching configured value in GitLab UI
+    webhook_signature: str = Header(None, alias="webhook-signature"),
+    event_id: str = Header(None, alias="webhook-id"),
+    timestamp: str = Header(None, alias="webhook-timestamp"),
 ):
     # Security validation
-    if x_gitlab_token != GITLAB_WEBHOOK_SECRET:
-        raise HTTPException(status_code=401, detail="Invalid GitLab Webhook Secret Token")
+    body_bytes = await request.body()
+    body_str = body_bytes.decode("utf-8")
+
+    raw_key = base64.b64decode(GITLAB_WEBHOOK_SECRET.removeprefix('whsec_'))
+    message = f"{event_id}.{timestamp}.{body_str}".encode('utf-8')  
+    digest = hmac.new(raw_key, message, hashlib.sha256).digest()
+    expected = "v1," + base64.b64encode(digest).decode('utf-8')
+
+    if not any(
+        hmac.compare_digest(expected, sig)
+        for sig in (webhook_signature or "").split(' ')
+    ):
+        raise HTTPException(status_code=401, detail="Invalid GitLab Webhook Signature")
+
 
     # Extracting the payload data as JSON
     payload = await request.json()

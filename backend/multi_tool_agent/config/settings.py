@@ -1,8 +1,12 @@
 import os
 from dataclasses import dataclass
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+load_dotenv(
+    dotenv_path=Path(__file__).resolve().parent.parent / ".env",
+    override=True
+)
 
 @dataclass(frozen=True)
 class Settings:
@@ -12,7 +16,7 @@ class Settings:
     # GitLab Partner Config
     GITLAB_PRIVATE_TOKEN: str = os.getenv("GITLAB_PRIVATE_TOKEN", "")
     GITLAB_BASE_URL: str = os.getenv("GITLAB_BASE_URL", "https://gitlab.com/api/v4")
-    GITLAB_WEBHOOK_SECRET: str = os.getenv("GITLAB_WEBHOOK_SECRET", "super-secret-token")
+    GITLAB_WEBHOOK_SECRET: str = os.getenv("GITLAB_WEBHOOK_SECRET", "")
     
     # Server Config
     ENV: str = os.getenv("ENV", "development") # development / production
