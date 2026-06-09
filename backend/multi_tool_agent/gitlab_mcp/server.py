@@ -3,6 +3,7 @@ import httpx
 import base64
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from urllib.parse import quote
 from ..config.settings import settings
 
 load_dotenv()
@@ -26,7 +27,8 @@ async def get_failed_jobs(project_path: str, pipeline_id: int) -> str:
         project_path: The URL-encoded path of the project (e.g., 'user%2Frepo') or ID.
         pipeline_id: The numeric ID of the pipeline that failed.
     """
-    url = f"{GL_BASE}/projects/{project_path}/pipelines/{pipeline_id}/jobs"
+    encoded_project_path = project_path.replace("/", "%2F")
+    url = f"{GL_BASE}/projects/{encoded_project_path}/pipelines/{pipeline_id}/jobs"
     params = {"scope": "failed"} # Trying to filter the failed jobs directly via API scope parameter
     
     async with httpx.AsyncClient() as client:
@@ -53,7 +55,8 @@ async def get_pipeline_logs(project_path: str, job_id: int) -> str:
         project_path: The URL-encoded path of the project (e.g., 'user%2Frepo') or ID.
         job_id: The numeric ID of the job.
     """
-    url = f"{GL_BASE}/projects/{project_path}/jobs/{job_id}/trace"
+    encoded_project_path = project_path.replace("/", "%2F")
+    url = f"{GL_BASE}/projects/{encoded_project_path}/jobs/{job_id}/trace"
     async with httpx.AsyncClient() as client:
         response = await client.get(url, headers=HEADERS)
         
@@ -71,7 +74,8 @@ async def get_recent_commits(project_path: str, ref_name: str = "main", max_coun
         ref_name: The branch name or tag name to fetch commits from (defaults to 'main').
         max_count: The maximum number of recent commits to return (defaults to 5).
     """
-    url = f"{GL_BASE}/projects/{project_path}/repository/commits"
+    encoded_project_path = project_path.replace("/", "%2F")
+    url = f"{GL_BASE}/projects/{encoded_project_path}/repository/commits"
     params = {"ref_name": ref_name, "per_page":max_count}
 
     async with httpx.AsyncClient() as client:
@@ -97,8 +101,9 @@ async def read_repository_files(project_path: str, file_path: str, ref: str = "m
         file_path: The exact path to the file within the repository (e.g., 'src/main.py').
         ref: The branch name or commit SHA to read the file from (defaults to 'main').
     """
-    encoded_path = file_path.replace("/", "%2F")
-    url = f"{GL_BASE}/projects/{project_path}/repository/files/{encoded_path}/raw"
+    encoded_project_path = project_path.replace("/", "%2F")
+    encoded_file_path = file_path.replace("/", "%2F")
+    url = f"{GL_BASE}/projects/{encoded_project_path}/repository/files/{encoded_file_path}/raw"
     params = {"ref":ref}
 
     async with httpx.AsyncClient() as client:
@@ -119,7 +124,8 @@ async def create_branch(project_path: str, branch_name: str, ref: str = "main") 
         branch_name: The name of the new branch you want to create.
         ref: The branch or commit SHA to branch off from (defaults to 'main').
     """
-    url = f"{GL_BASE}/projects/{project_path}/repository/branches"
+    encoded_project_path = project_path.replace("/", "%2F")
+    url = f"{GL_BASE}/projects/{encoded_project_path}/repository/branches"
     payload = {
         "branch": branch_name,
         "ref": ref
@@ -144,8 +150,9 @@ async def commit_file_change(project_path: str, branch_name: str, file_path: str
         commit_message: A descriptive commit message explaining the automated fix.
         file_content: The full content of the updated file text.
     """
-    encoded_path = file_path.replace("/", "%2F")
-    url = f"{GL_BASE}/projects/{project_path}/repository/files/{encoded_path}"
+    encoded_project_path = project_path.replace("/", "%2F")
+    encoded_file_path = file_path.replace("/", "%2F")
+    url = f"{GL_BASE}/projects/{encoded_project_path}/repository/files/{encoded_file_path}"
     
     payload = {
         "branch": branch_name,
@@ -168,7 +175,8 @@ async def commit_file_change(project_path: str, branch_name: str, file_path: str
 @mcp.tool()
 async def create_merge_request(project_path: str, source_branch: str, title: str, description: str) -> str:
     """Creates a merge request with the fix."""
-    url = f"{GL_BASE}/projects/{project_path}/merge_requests"
+    encoded_project_path = project_path.replace("/", "%2F")
+    url = f"{GL_BASE}/projects/{encoded_project_path}/merge_requests"
     payload = {
         "source_branch": source_branch,
         "target_branch": "main",
