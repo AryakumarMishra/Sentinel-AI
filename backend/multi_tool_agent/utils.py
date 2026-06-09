@@ -57,8 +57,9 @@ def parse_fix_json(text: str) -> dict | None:
 
 async def verify_file_exists(project_path: str, file_path: str, ref: str) -> bool:
     """Hit GitLab API to confirm file_path exists in the repo."""
-    encoded = file_path.replace("/", "%2F")
-    url = f"{settings.GITLAB_BASE_URL}/projects/{project_path}/repository/files/{encoded}/raw?ref={ref}"
+    encoded_project_path = project_path.replace("/", "%2F")
+    encoded_file_path = file_path.replace("/", "%2F")
+    url = f"{settings.GITLAB_BASE_URL}/projects/{encoded_project_path}/repository/files/{encoded_file_path}/raw?ref={ref}"
     headers = {"PRIVATE-TOKEN": settings.GITLAB_PRIVATE_TOKEN}
     
     async with httpx.AsyncClient() as client:
